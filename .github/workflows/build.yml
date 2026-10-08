@@ -1,0 +1,56 @@
+name: Build APK
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Gradle task
+        default: assembleDebug
+      source_url:
+        description: Git URL (optional)
+        default: ''
+      zip_path:
+        description: ZIP path in repo
+        default: projects/project.zip
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TASK: ${{ inputs.task }}
+      SRC_URL: ${{ inputs.source_url }}
+      ZIP_PATH: ${{ inputs.zip_path }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Fetch sources
+        run: |
+          rm -rf src && mkdir -p src
+          if [ -n "$SRC_URL" ]; then
+            git clone --depth 1 "$SRC_URL" src
+          else
+            unzip -q -o "$ZIP_PATH" -d src
+          fi
+      - name: Build
+        run: |
+          SETTINGS=$(find src -name settings.gradle -o -name settings.gradle.kts | awk '{print length, $0}' | sort -n | head -n1 | cut -d' ' -f2-)
+          if [ -z "$SETTINGS" ]; then echo "settings.gradle(.kts) not found"; exit 1; fi
+          cd "$(dirname "$SETTINGS")"
+          if [ -f gradlew ]; then chmod +x gradlew; ./gradlew "$TASK" --no-daemon --stacktrace; else gradle "$TASK" --no-daemon --stacktrace; fi
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p out
+          find src -name "*.apk" -path "*outputs*" -exec cp -t out/ {} +
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls out/*.apk
+          gh release create "build-${{ github.run_number }}" out/*.apk --title "Build ${{ github.run_number }}" --notes "Task $TASK"
